@@ -1,0 +1,19 @@
+# Go build artifacts
+/bin/
+*.exe
+*.test
+*.out
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Local dev artifacts
+*.log
