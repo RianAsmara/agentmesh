@@ -1,0 +1,19 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - gosec
+    - revive
+  exclusions:
+    paths:
+      - api/proto/gen
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
