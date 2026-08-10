@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package agentmesh.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "agentmesh/api/proto/gen/go/agentmesh/v1;agentmeshv1";
+
+// RequestMetadata carries cross-cutting request context that is propagated
+// across every AgentMesh RPC: correlation IDs and tracing information.
+// Services embed this rather than redefining these fields, so request
+// correlation stays consistent as new services are added.
+message RequestMetadata {
+  // request_id is a client- or gateway-generated identifier used to
+  // correlate a single logical request across services and logs.
+  string request_id = 1;
+
+  // trace_id is the W3C trace context trace ID, when distributed tracing
+  // is active for the request.
+  string trace_id = 2;
+
+  // requested_at is when the caller issued the request, as recorded by the
+  // originating service.
+  google.protobuf.Timestamp requested_at = 3;
+}
+
+// ErrorDetail is the structured error payload returned by AgentMesh gRPC
+// services in addition to the standard gRPC status code, so clients can
+// distinguish domain-specific failure reasons (e.g. "route not found" vs
+// "tenant suspended") without parsing status messages.
+message ErrorDetail {
+  // code is a stable, machine-readable error identifier, e.g.
+  // "TENANT_NOT_FOUND" or "CAPABILITY_UNAVAILABLE".
+  string code = 1;
+
+  // message is a human-readable description safe to display to operators.
+  string message = 2;
+}
