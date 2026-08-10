@@ -1,11 +1,23 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 )
 
 func TestLoad_Defaults(t *testing.T) {
+	// Ensure hermeticity: clear all AGENTMESH_* vars regardless of what the
+	// ambient environment (e.g. a developer's shell) has exported. t.Setenv
+	// registers automatic restoration via t.Cleanup; the subsequent
+	// os.Unsetenv makes the variable genuinely absent for the test body.
+	for _, key := range []string{"AGENTMESH_HTTP_ADDR", "AGENTMESH_LOG_LEVEL", "AGENTMESH_SHUTDOWN_TIMEOUT"} {
+		t.Setenv(key, "x")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("os.Unsetenv(%q) failed: %v", key, err)
+		}
+	}
+
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
@@ -68,5 +80,17 @@ func TestLoad_EmptyHTTPAddrFallsBackToDefault(t *testing.T) {
 	}
 	if cfg.HTTPAddr != defaultHTTPAddr {
 		t.Errorf("HTTPAddr = %q, want default %q", cfg.HTTPAddr, defaultHTTPAddr)
+	}
+}
+
+func TestLoad_EmptyShutdownTimeoutFallsBackToDefault(t *testing.T) {
+	t.Setenv("AGENTMESH_SHUTDOWN_TIMEOUT", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.ShutdownTimeout != defaultShutdownTimeout {
+		t.Errorf("ShutdownTimeout = %v, want default %v", cfg.ShutdownTimeout, defaultShutdownTimeout)
 	}
 }

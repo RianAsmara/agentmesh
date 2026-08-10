@@ -14,8 +14,9 @@ test: ## Run unit tests with race detector
 	go test -race ./...
 
 .PHONY: lint
-lint: ## Run golangci-lint
+lint: ## Run golangci-lint and buf lint
 	golangci-lint run ./...
+	cd api/proto && buf lint
 
 .PHONY: generate
 generate: ## Regenerate code from protobuf definitions (installs buf + plugins on first run; requires network access)

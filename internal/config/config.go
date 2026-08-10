@@ -35,7 +35,7 @@ func Load() (*Config, error) {
 		ShutdownTimeout: defaultShutdownTimeout,
 	}
 
-	if raw, ok := os.LookupEnv("AGENTMESH_SHUTDOWN_TIMEOUT"); ok {
+	if raw := os.Getenv("AGENTMESH_SHUTDOWN_TIMEOUT"); raw != "" {
 		d, err := time.ParseDuration(raw)
 		if err != nil {
 			return nil, fmt.Errorf("invalid AGENTMESH_SHUTDOWN_TIMEOUT %q: %w", raw, err)
