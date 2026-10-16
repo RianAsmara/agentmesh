@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,6 +18,7 @@ func TestLoad_Defaults(t *testing.T) {
 			t.Fatalf("os.Unsetenv(%q) failed: %v", key, err)
 		}
 	}
+	t.Setenv("AGENTMESH_DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
 
 	cfg, err := Load()
 	if err != nil {
@@ -34,6 +36,7 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_OverridesFromEnv(t *testing.T) {
+	t.Setenv("AGENTMESH_DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
 	t.Setenv("AGENTMESH_HTTP_ADDR", ":9090")
 	t.Setenv("AGENTMESH_LOG_LEVEL", "debug")
 	t.Setenv("AGENTMESH_SHUTDOWN_TIMEOUT", "5s")
@@ -72,6 +75,7 @@ func TestLoad_InvalidShutdownTimeout(t *testing.T) {
 }
 
 func TestLoad_EmptyHTTPAddrFallsBackToDefault(t *testing.T) {
+	t.Setenv("AGENTMESH_DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
 	t.Setenv("AGENTMESH_HTTP_ADDR", "")
 
 	cfg, err := Load()
@@ -84,6 +88,7 @@ func TestLoad_EmptyHTTPAddrFallsBackToDefault(t *testing.T) {
 }
 
 func TestLoad_EmptyShutdownTimeoutFallsBackToDefault(t *testing.T) {
+	t.Setenv("AGENTMESH_DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
 	t.Setenv("AGENTMESH_SHUTDOWN_TIMEOUT", "")
 
 	cfg, err := Load()
@@ -92,5 +97,68 @@ func TestLoad_EmptyShutdownTimeoutFallsBackToDefault(t *testing.T) {
 	}
 	if cfg.ShutdownTimeout != defaultShutdownTimeout {
 		t.Errorf("ShutdownTimeout = %v, want default %v", cfg.ShutdownTimeout, defaultShutdownTimeout)
+	}
+}
+
+func TestLoad_DatabaseURLRequired(t *testing.T) {
+	for _, key := range []string{"AGENTMESH_DATABASE_URL"} {
+		t.Setenv(key, "x")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("os.Unsetenv(%q) failed: %v", key, err)
+		}
+	}
+
+	_, err := Load()
+
+	if err == nil {
+		t.Fatal("Load() = nil error, want an error when AGENTMESH_DATABASE_URL is unset")
+	}
+	if !strings.Contains(err.Error(), "AGENTMESH_DATABASE_URL") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+func TestLoad_PoolDefaults(t *testing.T) {
+	t.Setenv("AGENTMESH_DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if cfg.MaxOpenConns != defaultMaxOpenConns {
+		t.Errorf("MaxOpenConns = %d, want %d", cfg.MaxOpenConns, defaultMaxOpenConns)
+	}
+	if cfg.MaxIdleConns != defaultMaxIdleConns {
+		t.Errorf("MaxIdleConns = %d, want %d", cfg.MaxIdleConns, defaultMaxIdleConns)
+	}
+	if cfg.ConnMaxLifetime != defaultConnMaxLifetime {
+		t.Errorf("ConnMaxLifetime = %v, want %v", cfg.ConnMaxLifetime, defaultConnMaxLifetime)
+	}
+}
+
+func TestLoad_RejectsInvalidPoolSettings(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"zero max open conns", "AGENTMESH_DB_MAX_OPEN_CONNS", "0"},
+		{"negative max open conns", "AGENTMESH_DB_MAX_OPEN_CONNS", "-1"},
+		{"non numeric max open conns", "AGENTMESH_DB_MAX_OPEN_CONNS", "many"},
+		{"negative max idle conns", "AGENTMESH_DB_MAX_IDLE_CONNS", "-1"},
+		{"idle above open", "AGENTMESH_DB_MAX_IDLE_CONNS", "999"},
+		{"bad lifetime", "AGENTMESH_DB_CONN_MAX_LIFETIME", "forever"},
+		{"zero lifetime", "AGENTMESH_DB_CONN_MAX_LIFETIME", "0s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENTMESH_DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
+			t.Setenv(tt.key, tt.value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() = nil error, want rejection of %s=%q", tt.key, tt.value)
+			}
+		})
 	}
 }
