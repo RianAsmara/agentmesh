@@ -136,3 +136,63 @@ func parseLimit(raw string) (int, error) {
 	// hasilnya dibatasi.
 	return n, nil
 }
+
+// capabilityResponse adalah bentuk kapabilitas yang dikirim ke klien.
+type capabilityResponse struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// agentResponse adalah bentuk agent yang dikirim ke klien.
+type agentResponse struct {
+	ID           string               `json:"id"`
+	TenantID     string               `json:"tenant_id"`
+	Name         string               `json:"name"`
+	Endpoint     string               `json:"endpoint"`
+	Status       string               `json:"status"`
+	Capabilities []capabilityResponse `json:"capabilities"`
+	CreatedAt    time.Time            `json:"created_at"`
+	UpdatedAt    time.Time            `json:"updated_at"`
+}
+
+// capabilityRequest adalah satu elemen kapabilitas dalam permintaan create.
+type capabilityRequest struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// createAgentRequest adalah body untuk POST /v1/tenants/{slug}/agents.
+//
+// Status tidak ada di sini dengan sengaja: agent yang baru didaftarkan
+// selalu berstatus unknown karena control plane belum pernah mendengar
+// kabar apa pun darinya. Heartbeat yang mengubah status baru ada di Phase 2.
+type createAgentRequest struct {
+	Name         string              `json:"name"`
+	Endpoint     string              `json:"endpoint"`
+	Capabilities []capabilityRequest `json:"capabilities"`
+}
+
+// patchAgentRequest adalah body untuk PATCH pada satu agent. Pointer
+// membedakan "tidak dikirim" dari "dikirim kosong".
+type patchAgentRequest struct {
+	Endpoint *string `json:"endpoint"`
+	Status   *string `json:"status"`
+}
+
+// newAgentResponse memetakan entitas domain ke bentuk response.
+func newAgentResponse(a domain.Agent) agentResponse {
+	caps := make([]capabilityResponse, 0, len(a.Capabilities))
+	for _, c := range a.Capabilities {
+		caps = append(caps, capabilityResponse{Name: c.Name, Version: c.Version})
+	}
+	return agentResponse{
+		ID:           a.ID.String(),
+		TenantID:     a.TenantID.String(),
+		Name:         a.Name,
+		Endpoint:     a.Endpoint,
+		Status:       string(a.Status),
+		Capabilities: caps,
+		CreatedAt:    a.CreatedAt,
+		UpdatedAt:    a.UpdatedAt,
+	}
+}
