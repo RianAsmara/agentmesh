@@ -30,8 +30,9 @@ run-control-plane: ## Run the control-plane service locally
 	go run ./cmd/control-plane
 
 .PHONY: migrate
-migrate: ## Apply database migrations (implemented in Phase 1)
-	@echo "not implemented yet: database migrations arrive in Phase 1"
+migrate: ## Apply database migrations
+	AGENTMESH_DATABASE_URL="$${AGENTMESH_DATABASE_URL:-postgres://agentmesh:agentmesh@localhost:5432/agentmesh?sslmode=disable}" \
+		go run ./cmd/migrate
 
 .PHONY: seed
 seed: ## Load demo tenant/agent seed data (implemented in Phase 1)
