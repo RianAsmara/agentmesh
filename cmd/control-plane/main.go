@@ -12,8 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"agentmesh/internal/api"
 	"agentmesh/internal/config"
 	"agentmesh/internal/observability"
+	"agentmesh/internal/store/postgres"
 )
 
 func main() {
@@ -31,14 +33,50 @@ func run(logOut io.Writer) error {
 
 	logger := observability.NewLogger(logOut, "control-plane", cfg.LogLevel)
 
-	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           newMux(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
+	// Koneksi database dibuka sebelum server mulai mendengarkan. Kalau
+	// database tidak terjangkau saat start, lebih baik proses gagal dengan
+	// pesan jelas daripada menyala lalu menolak setiap permintaan.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	connectCtx, cancelConnect := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelConnect()
+
+	db, err := postgres.Open(connectCtx, cfg.DatabaseURL, postgres.Options{
+		MaxOpenConns:    cfg.MaxOpenConns,
+		MaxIdleConns:    cfg.MaxIdleConns,
+		ConnMaxLifetime: cfg.ConnMaxLifetime,
+	})
+	if err != nil {
+		return fmt.Errorf("connect to database: %w", err)
+	}
+	defer func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	logger.Info("connected to database",
+		"max_open_conns", cfg.MaxOpenConns,
+		"max_idle_conns", cfg.MaxIdleConns,
+	)
+
+	// Perakitan dependensi terjadi di sini dan hanya di sini. Setiap
+	// lapisan menerima apa yang dibutuhkannya lewat interface, sehingga
+	// tidak ada package yang mencari sendiri dependensinya lewat variabel
+	// global.
+	handler := api.NewRouter(api.RouterConfig{
+		Logger:  logger,
+		Tenants: postgres.NewTenantStore(db),
+		Agents:  postgres.NewAgentStore(db),
+		DB:      postgres.NewPinger(db),
+	})
+
+	srv := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -68,16 +106,4 @@ func run(logOut io.Writer) error {
 
 	logger.Info("control-plane stopped cleanly")
 	return nil
-}
-
-func newMux() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthHandler)
-	return mux
-}
-
-func healthHandler(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
