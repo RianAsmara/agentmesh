@@ -89,7 +89,20 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 		case errors.Is(err, io.EOF):
 			return fmt.Errorf("%w: request body is empty", domain.ErrInvalid)
 		default:
-			return fmt.Errorf("%w: request body is not valid JSON: %s", domain.ErrInvalid, err.Error())
+			// Detail dari encoding/json memuat nama tipe dan field Go
+			// (misalnya `json: unknown field "x"`, atau "...Go struct field
+			// createTenantRequest.slug of type string") — itu bentuk internal
+			// struct kami. classify() saat ini sudah membuang message untuk
+			// cabang ErrInvalid, jadi detail itu tidak sampai ke klien hari
+			// ini; menahannya di sini membuat sifat tersebut tidak bergantung
+			// pada classify() tetap begitu. Detailnya dikirim ke log level
+			// debug supaya operator tidak kehilangan satu-satunya petunjuk
+			// mengapa sebuah body ditolak.
+			LoggerFrom(r.Context()).Debug("json decode failed",
+				"error", err.Error(),
+				"path", r.URL.Path,
+			)
+			return fmt.Errorf("%w: request body is not valid JSON", domain.ErrInvalid)
 		}
 	}
 
