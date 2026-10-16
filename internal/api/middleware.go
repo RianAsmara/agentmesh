@@ -174,9 +174,20 @@ func WithLogging(logger *slog.Logger) func(http.Handler) http.Handler {
 // dan memutus semua permintaan lain yang sedang berjalan. Pesan panic
 // hanya masuk ke log, tidak pernah ke body response — isinya bisa memuat
 // potongan state internal.
+//
+// Dipasang paling dalam dalam rangkaian middleware (lihat NewRouter):
+// dengan begitu request id sudah ada di context ketika panic dicatat, dan
+// permintaan yang panic tetap melewati WithLogging saat unwinding sehingga
+// masih mendapat baris ringkasannya. Meski demikian middleware ini tidak
+// bergantung pada urutan itu untuk benar — ia hanya kehilangan sebagian
+// konteks log bila dipasang di luar.
 func WithRecovery(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Dibungkus statusRecorder supaya deferred handler di bawah
+			// tahu apakah handler sudah mulai mengirim response.
+			rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
 			defer func() {
 				rec := recover()
 				if rec == nil {
@@ -190,12 +201,22 @@ func WithRecovery(logger *slog.Logger) func(http.Handler) http.Handler {
 					"request_id", RequestIDFrom(r.Context()),
 				)
 
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = w.Write([]byte(`{"error":{"code":"internal","message":"internal server error"}}`))
+				// Bila handler sudah menulis status atau sebagian body,
+				// envelope 500 tidak bisa lagi dikirim: di server net/http
+				// yang sebenarnya hasilnya adalah "superfluous WriteHeader"
+				// plus body campuran yang bukan JSON lagi. Panic tetap
+				// tercatat di log, hanya kliennya yang menerima response
+				// terpotong — satu-satunya pilihan yang tersisa.
+				if rw.wrote {
+					return
+				}
+
+				rw.Header().Set("Content-Type", "application/json")
+				rw.WriteHeader(http.StatusInternalServerError)
+				_, _ = rw.Write([]byte(`{"error":{"code":"internal","message":"internal server error"}}`))
 			}()
 
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(rw, r)
 		})
 	}
 }

@@ -183,3 +183,85 @@ func TestLoggerFrom_FallsBackWhenAbsent(t *testing.T) {
 		t.Fatal("LoggerFrom(ctx) = nil, want a usable fallback logger")
 	}
 }
+
+// Handler yang sudah mengirim sebagian body lalu panic adalah kasus yang
+// disembunyikan oleh httptest.ResponseRecorder: pada server net/http yang
+// sebenarnya, menulis envelope 500 di atas body yang sudah terkirim
+// menghasilkan "superfluous WriteHeader" dan body campuran yang bukan JSON
+// lagi di sisi klien. Recovery harus diam bila response sudah dimulai.
+func TestWithRecovery_DoesNotWriteOverStartedResponse(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := observability.NewLogger(&logBuf, "test", "error")
+
+	handler := WithRecovery(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":[`))
+		panic("exploded mid-stream")
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/tenants", nil))
+
+	if got := rec.Body.String(); got != `{"items":[` {
+		t.Errorf("body = %q, want the partial body untouched %q", got, `{"items":[`)
+	}
+	if strings.Contains(rec.Body.String(), "internal server error") {
+		t.Errorf("recovery appended an envelope to an already-started response: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want the already-sent %d", rec.Code, http.StatusOK)
+	}
+	// Panic yang tidak bisa dilaporkan ke klien tetap harus terlihat di log.
+	if !strings.Contains(logBuf.String(), "panic") {
+		t.Errorf("log output does not mention the panic: %s", logBuf.String())
+	}
+}
+
+// Recovery dipasang paling dalam (lihat Chain di NewRouter) supaya request
+// id sudah ada di context saat panic dicatat, dan supaya permintaan yang
+// panic tetap mendapat baris ringkasan dari WithLogging.
+func TestWithRecovery_InnermostLogsRequestIDAndSummary(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := observability.NewLogger(&logBuf, "test", "info")
+
+	handler := Chain(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			panic("handler exploded")
+		}),
+		WithRequestID(),
+		WithLogging(logger),
+		WithRecovery(logger),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	req.Header.Set(RequestIDHeader, "req-xyz")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+
+	lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("log produced %d lines, want 2 (panic + request summary):\n%s", len(lines), logBuf.String())
+	}
+
+	for i, line := range lines {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line %d is not valid JSON: %v\n%s", i, err, line)
+		}
+		if got := entry["request_id"]; got != "req-xyz" {
+			t.Errorf("log line %d request_id = %v, want %q", i, got, "req-xyz")
+		}
+	}
+
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &summary); err != nil {
+		t.Fatalf("summary line is not valid JSON: %v", err)
+	}
+	if got := summary["status"]; got != float64(http.StatusInternalServerError) {
+		t.Errorf("summary status = %v, want %v", got, http.StatusInternalServerError)
+	}
+}
