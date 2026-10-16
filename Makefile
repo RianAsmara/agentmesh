@@ -27,7 +27,8 @@ generate: ## Regenerate code from protobuf definitions (installs buf + plugins o
 
 .PHONY: run-control-plane
 run-control-plane: ## Run the control-plane service locally
-	go run ./cmd/control-plane
+	AGENTMESH_DATABASE_URL="$${AGENTMESH_DATABASE_URL:-postgres://agentmesh:agentmesh@localhost:5432/agentmesh?sslmode=disable}" \
+		go run ./cmd/control-plane
 
 .PHONY: migrate
 migrate: ## Apply database migrations
@@ -35,12 +36,22 @@ migrate: ## Apply database migrations
 		go run ./cmd/migrate
 
 .PHONY: seed
-seed: ## Load demo tenant/agent seed data (implemented in Phase 1)
-	@echo "not implemented yet: seed data arrives in Phase 1"
+seed: ## Load demo tenant/agent seed data
+	AGENTMESH_DATABASE_URL="$${AGENTMESH_DATABASE_URL:-postgres://agentmesh:agentmesh@localhost:5432/agentmesh?sslmode=disable}" \
+		go run ./cmd/seed
 
 .PHONY: dev
-dev: ## Start the full local stack via Docker Compose (implemented in Phase 8)
-	@echo "not implemented yet: docker-compose stack arrives in Phase 8"
+dev: ## Start local PostgreSQL via Docker Compose and wait for it to be ready
+	docker compose up -d postgres
+	@echo "waiting for postgres to become healthy..."
+	@until [ "$$(docker inspect -f '{{.State.Health.Status}}' agentmesh-postgres 2>/dev/null)" = "healthy" ]; do \
+		sleep 1; \
+	done
+	@echo "postgres is ready"
+
+.PHONY: test-short
+test-short: ## Run only the fast tests (skips container-backed tests)
+	go test -short -race ./...
 
 .PHONY: run-router
 run-router: ## Run the data-plane router locally (implemented in Phase 3)
@@ -59,5 +70,5 @@ profile: ## Capture CPU/heap/mutex profiles (implemented in Phase 12)
 	@echo "not implemented yet: profiling workflow arrives in Phase 12"
 
 .PHONY: compose-down
-compose-down: ## Tear down the Docker Compose stack (implemented in Phase 8)
-	@echo "not implemented yet: docker-compose stack arrives in Phase 8"
+compose-down: ## Tear down the Docker Compose stack
+	docker compose down

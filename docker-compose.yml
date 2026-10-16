@@ -1,0 +1,30 @@
+# Stack pengembangan lokal untuk AgentMesh.
+#
+# Dibawa maju dari Phase 8 karena Phase 1 memperkenalkan PostgreSQL, dan
+# tanpa berkas ini tidak ada cara menjalankan database secara lokal.
+# Phase 8 akan menambahkan OpenTelemetry Collector dan kawan-kawannya di
+# sini.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: agentmesh-postgres
+    environment:
+      POSTGRES_USER: agentmesh
+      POSTGRES_PASSWORD: agentmesh
+      POSTGRES_DB: agentmesh
+    ports:
+      - "5432:5432"
+    volumes:
+      - agentmesh-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready penting: tanpa ini, "docker compose up -d" selesai
+      # sebelum PostgreSQL benar-benar siap, dan "make migrate" yang
+      # langsung dijalankan sesudahnya akan gagal.
+      test: ["CMD-SHELL", "pg_isready -U agentmesh -d agentmesh"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  agentmesh-pgdata:
