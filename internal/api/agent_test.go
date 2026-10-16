@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -56,6 +57,20 @@ func (f *fakeAgentStore) GetByName(_ context.Context, tenantID uuid.UUID, name s
 func (f *fakeAgentStore) List(_ context.Context, tenantID uuid.UUID, filter store.AgentFilter) ([]domain.Agent, string, error) {
 	if f.forceErr != nil {
 		return nil, "", f.forceErr
+	}
+	// DEVIASI dari brief: brief menuliskan List tanpa memeriksa filter.Cursor
+	// sama sekali, tetapi TestAgentHandler_ListRejectsBadQueryParameters
+	// (subtest "malformed cursor") mengharapkan 400 untuk cursor yang bukan
+	// base64url — persis kontrak store.AgentStore sungguhan (lihat
+	// decodeCursor di internal/store/postgres/cursor.go, dan
+	// TestAgentStore_ListRejectsBadCursor). Tanpa pengecekan ini fake
+	// mengabaikan cursor rusak secara diam-diam dan test itu gagal. Hanya
+	// bentuk base64 yang diperiksa di sini, bukan isi JSON-nya — cukup untuk
+	// menegakkan kontrak tanpa menduplikasi seluruh decodeCursor.
+	if filter.Cursor != "" {
+		if _, err := base64.RawURLEncoding.DecodeString(filter.Cursor); err != nil {
+			return nil, "", domain.ErrInvalid
+		}
 	}
 	items := make([]domain.Agent, 0)
 	for _, a := range f.byTenantAndName {
