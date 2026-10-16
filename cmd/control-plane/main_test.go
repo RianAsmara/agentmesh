@@ -2,39 +2,48 @@
 package main
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"bytes"
+	"os"
+	"strings"
 	"testing"
 )
 
-func TestNewMux_HealthzRouting(t *testing.T) {
-	tests := []struct {
-		name       string
-		method     string
-		path       string
-		wantStatus int
-		wantBody   string
-	}{
-		{"GET /healthz succeeds", http.MethodGet, "/healthz", http.StatusOK, `{"status":"ok"}`},
-		{"POST /healthz not allowed", http.MethodPost, "/healthz", http.StatusMethodNotAllowed, ""},
-		{"unknown path returns 404", http.MethodGet, "/nope", http.StatusNotFound, ""},
+// run harus gagal cepat dengan pesan yang menyebut variabel yang hilang,
+// bukan panic dan bukan diam-diam menyala tanpa database.
+func TestRun_FailsWithoutDatabaseURL(t *testing.T) {
+	for _, key := range []string{"AGENTMESH_DATABASE_URL"} {
+		t.Setenv(key, "x")
+		if err := unsetenv(key); err != nil {
+			t.Fatalf("unset %q: %v", key, err)
+		}
 	}
 
-	mux := newMux()
+	err := run(&bytes.Buffer{})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, tt.path, nil)
-			rec := httptest.NewRecorder()
-
-			mux.ServeHTTP(rec, req)
-
-			if rec.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
-			if tt.wantBody != "" && rec.Body.String() != tt.wantBody {
-				t.Errorf("body = %q, want %q", rec.Body.String(), tt.wantBody)
-			}
-		})
+	if err == nil {
+		t.Fatal("run() = nil, want an error when AGENTMESH_DATABASE_URL is unset")
+	}
+	if !strings.Contains(err.Error(), "AGENTMESH_DATABASE_URL") {
+		t.Errorf("error %q does not name the missing variable", err)
 	}
 }
+
+// run harus mengembalikan error, bukan panic, ketika database tidak bisa
+// dihubungi.
+func TestRun_FailsWhenDatabaseUnreachable(t *testing.T) {
+	// Port 1 dijamin tidak ada yang mendengarkan.
+	t.Setenv("AGENTMESH_DATABASE_URL", "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
+	t.Setenv("AGENTMESH_LOG_LEVEL", "error")
+
+	err := run(&bytes.Buffer{})
+
+	if err == nil {
+		t.Fatal("run() = nil, want an error when the database is unreachable")
+	}
+	if !strings.Contains(err.Error(), "connect to database") {
+		t.Errorf("error %q does not explain that the database connection failed", err)
+	}
+}
+
+// unsetenv membungkus os.Unsetenv agar test di atas terbaca jelas.
+func unsetenv(key string) error { return os.Unsetenv(key) }
