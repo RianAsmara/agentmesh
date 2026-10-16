@@ -83,6 +83,27 @@ func TestRouter_ReadyzDoesNotLeakDatabaseDetail(t *testing.T) {
 	}
 }
 
+// Review Focus #3: un RouterConfig yang lupa mengisi DB tidak boleh membuat
+// /readyz panic. Ini bukan kasus di brief task-8, tapi NewRouter menerima
+// Pinger lewat interface — dan memanggil method pada interface nil adalah
+// panic run-time di Go, bukan nil-pointer biasa yang bisa dicek dalam
+// handler. Mengujinya di sini mengunci perilaku defensif di handleReadyz.
+func TestRouter_ReadyzDoesNotPanicOnNilPinger(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		Logger:  observability.NewLogger(&bytes.Buffer{}, "test", "error"),
+		Tenants: newFakeTenantStore(),
+		Agents:  newFakeAgentStore(),
+		DB:      nil,
+	})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d for a nil Pinger: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+}
+
 func TestRouter_RoutesAreWired(t *testing.T) {
 	router := newTestRouter(nil)
 
