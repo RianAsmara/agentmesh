@@ -3,12 +3,16 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"agentmesh/internal/domain"
 	"agentmesh/internal/observability"
+	"agentmesh/internal/store"
 )
 
 // fakePinger memalsukan pemeriksaan kesehatan database.
@@ -143,5 +147,68 @@ func TestRouter_AppliesMiddleware(t *testing.T) {
 
 	if rec.Header().Get(RequestIDHeader) == "" {
 		t.Error("response is missing the request id header — middleware is not wired")
+	}
+}
+
+// panickingTenantStore memaksa panic dari dalam handler, supaya panic itu
+// menempuh rangkaian middleware yang dibangun NewRouter — bukan rangkaian
+// yang disusun sendiri oleh test.
+type panickingTenantStore struct {
+	store.TenantStore
+}
+
+func (panickingTenantStore) List(context.Context, store.TenantFilter) ([]domain.Tenant, string, error) {
+	panic("handler exploded inside the real router")
+}
+
+// Urutan middleware di router.go sebelumnya tidak dijaga oleh test apa pun.
+// TestWithRecovery_InnermostLogsRequestIDAndSummary menyusun Chain-nya
+// sendiri di middleware_test.go, jadi ia membuktikan middleware-nya bisa
+// dikomposisi dengan benar — bukan bahwa NewRouter memang mengomposisinya
+// begitu. Membalik urutan Chain di router.go ke bentuk cacat (recovery
+// paling luar) lolos seluruh suite tanpa satu pun test merah. Test ini
+// menutup celah itu: ia menembakkan panic lewat router sungguhan dan
+// menuntut dua sifat yang hanya berlaku bila recovery paling dalam —
+// panic tercatat DENGAN request id, dan permintaan yang panic tetap
+// mendapat baris ringkasan dari WithLogging.
+func TestRouter_PanicIsRecoveredWithRequestIDAndSummary(t *testing.T) {
+	var logBuf bytes.Buffer
+
+	router := NewRouter(RouterConfig{
+		Logger:  observability.NewLogger(&logBuf, "test", "info"),
+		Tenants: panickingTenantStore{TenantStore: newFakeTenantStore()},
+		Agents:  newFakeAgentStore(),
+		DB:      fakePinger{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	req.Header.Set(RequestIDHeader, "req-router-panic")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "exploded") {
+		t.Errorf("response leaked the panic message: %s", rec.Body.String())
+	}
+
+	lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("log produced %d lines, want 2 (panic + request summary); "+
+			"a missing summary means recovery is wired outside WithLogging:\n%s",
+			len(lines), logBuf.String())
+	}
+
+	for i, line := range lines {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line %d is not valid JSON: %v\n%s", i, err, line)
+		}
+		if got := entry["request_id"]; got != "req-router-panic" {
+			t.Errorf("log line %d request_id = %v, want %q; "+
+				"an empty id means recovery is wired outside WithRequestID",
+				i, got, "req-router-panic")
+		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"testing"
 
 	"github.com/google/uuid"
@@ -84,6 +85,24 @@ func (f *fakeAgentStore) List(_ context.Context, tenantID uuid.UUID, filter stor
 			continue
 		}
 		items = append(items, a)
+	}
+
+	// Map iteration tidak punya urutan, sedangkan store sungguhan mengurutkan
+	// keyset (created_at, id). Diurutkan di sini supaya paginasi bisa diuji
+	// secara deterministik, bukan kebetulan.
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+
+	// Brief menulis `return items, "", nil` — fake mengabaikan filter.Limit
+	// dan tidak pernah mengembalikan cursor, sehingga plumbing Limit/next di
+	// handler (agent.go: Limit diteruskan, next digaungkan ke NextCursor)
+	// tidak pernah teruji sama sekali. Store sungguhan memotong di Limit lalu
+	// mengembalikan cursor halaman berikutnya; fake kini meniru kontrak itu.
+	// Isi cursor tidak perlu sama dengan milik Postgres, hanya bentuknya
+	// (base64url, agar lolos pengecekan di atas bila dikirim kembali).
+	if filter.Limit > 0 && len(items) > filter.Limit {
+		last := items[filter.Limit-1]
+		items = items[:filter.Limit]
+		return items, base64.RawURLEncoding.EncodeToString([]byte(last.Name)), nil
 	}
 	return items, "", nil
 }
@@ -564,4 +583,80 @@ func TestAgentHandler_DeleteIsScopedToTenantInPath(t *testing.T) {
 	if _, exists := agents.byTenantAndName[agentKey(tenantA.ID, "secret-agent")]; !exists {
 		t.Error("a cross-tenant delete removed another tenant's agent")
 	}
+}
+
+// Paginasi adalah salah satu fitur yang spec Section 6 argumentasikan secara
+// khusus (keyset, bukan offset), tetapi sebelum test ini tidak ada satu pun
+// test yang mengirim ?limit= bernilai positif atau memeriksa next_cursor
+// terisi. Akibatnya plumbing di handler — Limit diteruskan ke store.AgentFilter
+// dan next digaungkan ke NextCursor — bisa rusak total tanpa satu test pun
+// berubah merah.
+func TestAgentHandler_ListPaginatesWithLimitAndCursor(t *testing.T) {
+	tenants := newFakeTenantStore()
+	tenant := seedTenant(tenants, "acme")
+	agents := newFakeAgentStore()
+	seedAgent(agents, tenant.ID, "a-one")
+	seedAgent(agents, tenant.ID, "a-two")
+	seedAgent(agents, tenant.ID, "a-three")
+
+	h := newAgentMux(tenants, agents)
+
+	rec := doRequest(t, h, http.MethodGet, "/v1/tenants/acme/agents?limit=2", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var page listResponse[agentResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("response is not valid JSON: %v\n%s", err, rec.Body.String())
+	}
+
+	if len(page.Items) != 2 {
+		t.Errorf("items = %d, want 2 (limit must be honoured)", len(page.Items))
+	}
+	if page.NextCursor == "" {
+		t.Error("next_cursor is empty, want a cursor since a third agent remains")
+	}
+
+	// Cursor yang dikembalikan harus bisa dikirim balik tanpa ditolak 400.
+	rec2 := doRequest(t, h, http.MethodGet,
+		"/v1/tenants/acme/agents?limit=2&cursor="+page.NextCursor, nil)
+	if rec2.Code != http.StatusOK {
+		t.Errorf("replaying next_cursor: status = %d, want 200; body=%s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// Halaman terakhir tidak boleh membawa next_cursor — kalau ia membawa, klien
+// akan terus meminta halaman kosong tanpa akhir.
+func TestAgentHandler_ListOmitsCursorOnLastPage(t *testing.T) {
+	tenants := newFakeTenantStore()
+	tenant := seedTenant(tenants, "acme")
+	agents := newFakeAgentStore()
+	seedAgent(agents, tenant.ID, "only-one")
+
+	rec := doRequest(t, newAgentMux(tenants, agents), http.MethodGet,
+		"/v1/tenants/acme/agents?limit=10", nil)
+
+	var page listResponse[agentResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if page.NextCursor != "" {
+		t.Errorf("next_cursor = %q on the last page, want empty", page.NextCursor)
+	}
+	if !jsonOmitsField(t, rec.Body.Bytes(), "next_cursor") {
+		t.Error("next_cursor must be omitted entirely from the JSON on the last page")
+	}
+}
+
+// jsonOmitsField memeriksa field benar-benar tidak ada di JSON, bukan hanya
+// bernilai kosong setelah unmarshal — itu yang dijanjikan tag omitempty.
+func jsonOmitsField(t *testing.T, raw []byte, field string) bool {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("response is not a JSON object: %v", err)
+	}
+	_, present := m[field]
+	return !present
 }
