@@ -7,12 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib" // mendaftarkan driver "pgx"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"gorm.io/gorm"
 
+	"agentmesh/internal/domain"
 	"agentmesh/internal/migrate"
 )
 
@@ -95,4 +97,30 @@ func startSharedPostgres() (*gorm.DB, error) {
 		MaxIdleConns:    5,
 		ConnMaxLifetime: 5 * time.Minute,
 	})
+}
+
+// newTenant membuat satu tenant dengan slug acak dan mengembalikannya.
+//
+// Setiap test memanggil ini agar punya ruang sendiri di database bersama.
+// Karena semua query agent dibatasi tenant_id, test yang berjalan beriringan
+// tidak akan saling melihat data — sekaligus menjadi latihan atas sifat
+// isolasi tenant yang memang ingin dibuktikan.
+func newTenant(t *testing.T, db *gorm.DB) domain.Tenant {
+	t.Helper()
+
+	tenant := domain.Tenant{
+		ID:     uuid.New(),
+		Slug:   "t" + uuid.New().String()[:8],
+		Name:   "Test Tenant",
+		Status: domain.TenantActive,
+	}
+	if err := tenant.Validate(); err != nil {
+		t.Fatalf("test tenant is invalid: %v", err)
+	}
+
+	store := NewTenantStore(db)
+	if err := store.Create(context.Background(), &tenant); err != nil {
+		t.Fatalf("create test tenant: %v", err)
+	}
+	return tenant
 }
