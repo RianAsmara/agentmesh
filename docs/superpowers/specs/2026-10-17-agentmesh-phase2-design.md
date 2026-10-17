@@ -132,7 +132,15 @@ Phase 3 beyond a liveness bit.
 
 Phase 2 does *not* implement capability reconciliation from heartbeats — that
 is drift detection, which the roadmap places at Phase 6. The contract carries
-the field; Phase 2 records it and acts only on liveness.
+the field and Phase 2 acts only on liveness.
+
+To be precise about "records," since an earlier draft left this ambiguous
+enough that the implementation plan could not tell what to build: Phase 2
+logs the announced capability set on the heartbeat path and writes nothing to
+the `capabilities` table from it. Writing them would be reconciliation — it
+would require deciding what to do when a heartbeat disagrees with the
+registered set, which is exactly Phase 6's question. Logging them proves the
+field arrives intact and gives Phase 6 something to read, at no schema cost.
 
 ## Section 1 — The gRPC Agent Contract
 
