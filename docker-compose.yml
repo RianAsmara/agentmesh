@@ -13,8 +13,15 @@ services:
       POSTGRES_USER: agentmesh
       POSTGRES_PASSWORD: agentmesh
       POSTGRES_DB: agentmesh
+    # Diikat ke loopback, bukan 0.0.0.0. Tanpa prefiks 127.0.0.1, Docker
+    # mempublikasikan port ini di SEMUA antarmuka — termasuk alamat LAN —
+    # sehingga Postgres dengan kredensial dev yang mudah diterka bisa
+    # dihubungi dari jaringan sekitar. Itu bukan hipotesis: satu container
+    # yang tertinggal hidup pernah terbuka ke LAN persis karena baris ini.
+    # migrate, seed, dan control-plane semuanya berjalan di host, jadi
+    # loopback sudah cukup.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - agentmesh-pgdata:/var/lib/postgresql/data
     healthcheck:
