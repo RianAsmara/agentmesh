@@ -18,7 +18,15 @@
 # Local dev artifacts
 *.log
 
-# Claude Code local state: worktrees, session data, and local settings.
-# Committing .claude/worktrees/ records a gitlink (mode 160000) pointing at
-# a commit that exists in no remote, which clones as a broken submodule.
-.claude/
+# Claude Code local state. Ignored selectively, not as a blanket .claude/:
+# shared project content lives there too (skills/, and agents/ if added), and
+# those are meant to be committed and reviewed like any other project asset.
+#
+# .claude/worktrees/ in particular must stay ignored: committing it records a
+# gitlink (mode 160000) pointing at a commit that exists in no remote, which
+# clones as a broken submodule.
+.claude/worktrees/
+.claude/settings.local.json
+.claude/sessions/
+.claude/history/
+.claude/todos/
