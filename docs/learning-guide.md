@@ -687,6 +687,92 @@ memperluas `/readyz` begitu ada dependensi kedua (misalnya Redis di Phase
 7) tanpa membuatnya menjadi satu titik kegagalan tunggal untuk semua
 dependensi?
 
+### 8. Middleware Order Is Load-Bearing
+
+**What problem it solves:** rangkaian middleware tampak seperti daftar yang
+urutannya selera. Ia bukan. Di Phase 1, satu pertukaran posisi antara
+`WithRecovery` dan `WithLogging` membuat setiap permintaan yang panic
+kehilangan baris lognya sama sekali — bukan log yang kurang rapi, tapi
+tidak ada log — dan setiap catatan panic kehilangan request id-nya. Bug itu
+lolos dari seluruh suite test dan baru ketahuan di review.
+
+**Why it exists:** `Chain(h, A, B, C)` melipat dari kanan, sehingga argumen
+pertama berada paling LUAR dan argumen terakhir paling DALAM. Konsekuensinya
+tidak intuitif: middleware yang ditulis pertama membungkus semuanya.
+
+**How it works:** `WithRecovery` membaca request id lewat
+`RequestIDFrom(r.Context())` dari `r` **miliknya sendiri**. `WithRequestID`
+hanya menyuntikkan id ke salinan request yang ia teruskan ke bawah, jadi
+middleware di ATAS-nya tidak akan pernah melihat id itu. Pasang recovery
+paling luar dan dua hal rusak sekaligus: (1) setiap `logger.Error("panic
+recovered...")` membawa `request_id: ""`, sehingga panic tidak bisa
+dikaitkan dengan permintaan yang menyebabkannya; (2) panic membatalkan
+tumpukan melewati frame `WithLogging` sebelum middleware itu sempat
+menulis baris ringkasannya, sehingga permintaan yang crash — justru yang
+paling perlu dilihat — adalah satu-satunya yang tidak tercatat.
+
+Urutan yang benar menempatkan recovery paling dalam:
+
+```go
+Chain(mux,
+    WithRequestID(),
+    WithLogging(cfg.Logger),
+    WithRecovery(cfg.Logger),
+)
+```
+
+Selain itu `WithRecovery` dibuat tidak bergantung pada urutan untuk
+kebenarannya: ia membungkus `ResponseWriter` dalam `statusRecorder` dan
+melewatkan penulisan envelope 500 bila handler sudah mulai mengirim
+response. Tanpa pagar itu, handler yang sudah menulis sebagian body lalu
+panic akan menghasilkan "superfluous WriteHeader" dan body campuran yang
+bukan JSON lagi di sisi klien. Urutan kini soal observability, bukan soal
+benar atau salah.
+
+**Files involved:** `internal/api/router.go` (perakitan `Chain`),
+`internal/api/middleware.go` (`Chain`, `WithRecovery`, `statusRecorder`),
+`internal/api/router_test.go`
+(`TestRouter_PanicIsRecoveredWithRequestIDAndSummary`),
+`internal/api/middleware_test.go`
+(`TestWithRecovery_InnermostLogsRequestIDAndSummary`,
+`TestWithRecovery_DoesNotWriteOverStartedResponse`).
+
+**How to test it:** `go test ./internal/api/ -run TestRouter_PanicIsRecovered`.
+Test itu menembakkan panic melalui router sungguhan — bukan `Chain` yang
+disusun sendiri oleh test — lalu menuntut dua baris log yang keduanya
+membawa request id, plus status 500 di baris ringkasan. Balikkan urutan di
+`router.go` dan test gagal dengan "log produced 1 lines, want 2".
+
+**Common failure modes:** menguji komposisi middleware dengan `Chain` yang
+dirakit di dalam test. Itu membuktikan middleware-nya BISA dikomposisi
+dengan benar, bukan bahwa `NewRouter` memang mengomposisinya begitu — dan
+celah di antara dua pernyataan itulah yang menyembunyikan bug ini sampai
+review. Pelajarannya umum: uji perakitan yang benar-benar dikirim, bukan
+perakitan yang disusun ulang oleh test.
+
+**How it relates to real distributed systems:** setiap gateway dan service
+mesh punya rantai filter dengan masalah yang sama. Envoy menyusun HTTP
+filter berurutan; middleware Express dan Rack juga. Di semuanya, "di mana
+recovery dipasang" menentukan apakah insiden bisa ditelusuri, dan
+jawabannya hampir selalu "cukup dalam untuk tetap berada di dalam lapisan
+observability, cukup luar untuk menangkap handler".
+
+**Alternative approaches:** memasang recovery di KEDUA ujung rantai —
+paling luar untuk menangkap panic di middleware itu sendiri, paling dalam
+untuk konteks log yang lengkap. Phase 1 memilih satu saja karena
+`WithRequestID` dan `WithLogging` hanya membaca header, membuat uuid, dan
+menulis satu baris log; tidak ada sumber panic yang realistis di sana.
+Bila kelak ada middleware yang memanggil layanan luar, recovery kedua di
+lapisan terluar adalah jawabannya — bukan memindahkan yang sudah ada.
+
+**Interview questions this might raise:** diberi `Chain(h, A, B)`, mana
+yang melihat request lebih dulu, dan mana yang melihat response lebih
+dulu? Mengapa menambahkan nilai ke `context.Context` tidak bisa terlihat
+oleh middleware di atas pemanggil? Mengapa `httptest.ResponseRecorder`
+menerima penulisan ganda sementara server `net/http` sungguhan
+mengeluhkannya, dan apa artinya bagi test yang hijau?
+
+
 ## Known Gaps Carried Into Later Phases
 
 Daftar ini bukan bug yang belum ditemukan — setiap butir sudah diketahui
