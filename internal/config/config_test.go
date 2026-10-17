@@ -162,3 +162,28 @@ func TestLoad_RejectsInvalidPoolSettings(t *testing.T) {
 		})
 	}
 }
+
+// Batas atas menangkap salah ketik yang kalau tidak akan muncul sebagai
+// kegagalan koneksi acak jauh dari penyebabnya.
+func TestLoad_RejectsOutOfRangePoolSettings(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"open conns above the ceiling", map[string]string{"AGENTMESH_DB_MAX_OPEN_CONNS": "5000"}},
+		{"lifetime above the ceiling", map[string]string{"AGENTMESH_DB_CONN_MAX_LIFETIME": "720h"}},
+		{"negative lifetime", map[string]string{"AGENTMESH_DB_CONN_MAX_LIFETIME": "-5s"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENTMESH_DATABASE_URL", "postgres://u:p@localhost:5432/db")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			if _, err := Load(); err == nil {
+				t.Errorf("Load() = nil error, want a rejection for %v", tt.env)
+			}
+		})
+	}
+}

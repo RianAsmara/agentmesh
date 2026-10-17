@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -33,6 +34,9 @@ func run() error {
 	dsn := os.Getenv("AGENTMESH_DATABASE_URL")
 	if dsn == "" {
 		return errors.New("AGENTMESH_DATABASE_URL must be set")
+	}
+	if err := refuseNonLocal(dsn); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -142,4 +146,35 @@ func run() error {
 	}
 
 	return nil
+}
+
+// refuseNonLocal menolak menulis data demo ke database yang bukan lokal.
+//
+// Perintah ini membuat tenant "acme" beserta tiga agent. Dijalankan dengan
+// AGENTMESH_DATABASE_URL yang masih menunjuk staging atau produksi — satu
+// variabel yang tertinggal di shell sudah cukup — ia menulis data karangan
+// ke sana tanpa bertanya, dan karena seed-nya idempoten tidak ada pesan
+// kesalahan yang menandakannya. Host loopback adalah pagar yang paling
+// sesuai dengan maksud perintah ini, dan AGENTMESH_ALLOW_REMOTE_SEED=1
+// menyediakan jalan keluar yang eksplisit bila memang diperlukan.
+func refuseNonLocal(dsn string) error {
+	if os.Getenv("AGENTMESH_ALLOW_REMOTE_SEED") == "1" {
+		return nil
+	}
+
+	u, err := url.Parse(dsn)
+	if err != nil {
+		// DSN yang tidak bisa diurai tidak dilaporkan apa adanya: ia memuat
+		// kata sandi. Biarkan postgres.Open yang melaporkannya nanti, dengan
+		// kredensial yang sudah disunting oleh driver.
+		return errors.New("AGENTMESH_DATABASE_URL is not a valid URL")
+	}
+
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1", "":
+		return nil
+	default:
+		return fmt.Errorf("refusing to seed non-local database host %q; "+
+			"set AGENTMESH_ALLOW_REMOTE_SEED=1 to override", u.Hostname())
+	}
 }

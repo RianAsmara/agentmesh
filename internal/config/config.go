@@ -45,6 +45,18 @@ const (
 	defaultMaxOpenConns    = 25
 	defaultMaxIdleConns    = 5
 	defaultConnMaxLifetime = 30 * time.Minute
+
+	// maxAllowedOpenConns adalah batas atas yang masuk akal untuk satu
+	// proses. PostgreSQL punya max_connections global (default 100), jadi
+	// satu instance yang meminta ribuan koneksi tidak akan mendapatkannya —
+	// ia hanya menghabiskan kuota instance lain lalu gagal saat runtime,
+	// jauh dari tempat salah ketiknya. Ditolak saat start supaya kesalahan
+	// konfigurasi terlihat segera, bukan sebagai kegagalan koneksi acak.
+	maxAllowedOpenConns = 500
+
+	// maxAllowedConnLifetime menangkap satuan yang tertukar: "720h" yang
+	// dimaksud "720s" berarti koneksi praktis tidak pernah didaur ulang.
+	maxAllowedConnLifetime = 24 * time.Hour
 )
 
 // Load builds a Config from environment variables, applying defaults for
@@ -118,6 +130,10 @@ func (c *Config) validate() error {
 	if c.MaxOpenConns <= 0 {
 		return fmt.Errorf("AGENTMESH_DB_MAX_OPEN_CONNS must be positive, got %d", c.MaxOpenConns)
 	}
+	if c.MaxOpenConns > maxAllowedOpenConns {
+		return fmt.Errorf("AGENTMESH_DB_MAX_OPEN_CONNS (%d) must not exceed %d",
+			c.MaxOpenConns, maxAllowedOpenConns)
+	}
 	if c.MaxIdleConns < 0 {
 		return fmt.Errorf("AGENTMESH_DB_MAX_IDLE_CONNS must not be negative, got %d", c.MaxIdleConns)
 	}
@@ -130,6 +146,10 @@ func (c *Config) validate() error {
 	}
 	if c.ConnMaxLifetime <= 0 {
 		return fmt.Errorf("AGENTMESH_DB_CONN_MAX_LIFETIME must be positive, got %s", c.ConnMaxLifetime)
+	}
+	if c.ConnMaxLifetime > maxAllowedConnLifetime {
+		return fmt.Errorf("AGENTMESH_DB_CONN_MAX_LIFETIME (%s) must not exceed %s",
+			c.ConnMaxLifetime, maxAllowedConnLifetime)
 	}
 	return nil
 }
